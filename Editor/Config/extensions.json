@@ -33,8 +33,7 @@
         "category": "Essential",
         "packageUrl": "https://github.com/MiAO-AI-Lab/Unity-MCP-Tools-Behavior-Designer.git",
         "dependencies": [
-          "com.miao.mcp",
-          "com.miao.mcp.essential"
+          "com.miao.mcp"
         ]
       }
     ]

@@ -26,8 +26,8 @@ namespace com.MiAO.MCP.Launcher.Extensions
         private static readonly Dictionary<string, UnityEditor.PackageManager.PackageInfo> s_InstalledPackages = 
             new Dictionary<string, UnityEditor.PackageManager.PackageInfo>();
 
-        // Known MCP extension packages registry (fallback + remote)
-        private static readonly Dictionary<string, ExtensionRegistryEntry> s_FallbackExtensionRegistry = 
+        // Known MCP extension packages registry
+        private static readonly Dictionary<string, ExtensionRegistryEntry> s_ExtensionRegistry = 
             new Dictionary<string, ExtensionRegistryEntry>
             {
                 {
@@ -65,10 +65,6 @@ namespace com.MiAO.MCP.Launcher.Extensions
                 }
             };
 
-        // Combined registry (fallback + remote)
-        private static Dictionary<string, ExtensionRegistryEntry> s_ExtensionRegistry = 
-            new Dictionary<string, ExtensionRegistryEntry>();
-
         /// <summary>
         /// Event triggered when extension list is updated
         /// </summary>
@@ -84,9 +80,6 @@ namespace com.MiAO.MCP.Launcher.Extensions
         /// </summary>
         public static List<ExtensionPackageInfo> GetAvailableExtensions()
         {
-            // Initialize remote configuration if needed
-            InitializeRemoteConfiguration();
-            
             RefreshExtensionCache();
             
             // If no extensions found after refresh, create sample data for testing
@@ -147,23 +140,24 @@ namespace com.MiAO.MCP.Launcher.Extensions
                 {
                     Debug.Log($"[MCP Hub] Installing as local package: {extension.DisplayName}");
                     
-                    // Get the actual directory name for this package in Assets structure
-                    var actualDirectoryName = GetPackageDirectoryName(extension.Id);
-                    var packagePath = Path.Combine("Packages", actualDirectoryName);
-                    
-                    // Check if package already exists
-                    if (Directory.Exists(packagePath))
+                    // Check if package already exists (with compatibility check)
+                    var existingDirectoryName = FindActualPackageDirectory(extension.Id);
+                    if (!string.IsNullOrEmpty(existingDirectoryName))
                     {
-                        Debug.Log($"[MCP Hub] Package already exists locally: {extension.DisplayName}");
+                        Debug.Log($"[MCP Hub] Package already exists locally: {extension.DisplayName} at {existingDirectoryName}");
                         extension.UpdateInstallationStatus(true, "local");
                         OnExtensionInstalled?.Invoke(extension, true);
                         OnExtensionsUpdated?.Invoke();
                         return true;
                     }
                     
+                    // Get the target directory name for new installation (use standard package ID)
+                    var targetDirectoryName = GetPackageDirectoryName(extension.Id);
+                    var packagePath = Path.Combine("Packages", targetDirectoryName);
+                    
                     // Clone the package from Git repository
                     Debug.Log($"[MCP Hub] Cloning package from Git: {registryEntry.PackageUrl}");
-                    var cloneResult = await ClonePackageFromGit(registryEntry.PackageUrl, packagePath, actualDirectoryName, extension.LatestVersion);
+                    var cloneResult = await ClonePackageFromGit(registryEntry.PackageUrl, packagePath, targetDirectoryName, extension.LatestVersion);
                     
                     if (cloneResult)
                     {
@@ -229,8 +223,13 @@ namespace com.MiAO.MCP.Launcher.Extensions
                 {
                     Debug.Log($"[MCP Hub] Detected local package: {extension.Id}, removing from Assets directory");
                     
-                    // Get the actual directory name for this package in Assets structure
-                    var actualDirectoryName = GetPackageDirectoryName(extension.Id);
+                    // Find the actual directory name for this package (could be legacy name)
+                    var actualDirectoryName = FindActualPackageDirectory(extension.Id);
+                    if (string.IsNullOrEmpty(actualDirectoryName))
+                    {
+                        throw new Exception($"Could not find directory for package {extension.Id}");
+                    }
+                    
                     var packagePath = Path.Combine("Packages", actualDirectoryName);
                     
                     if (Directory.Exists(packagePath))
@@ -430,9 +429,6 @@ namespace com.MiAO.MCP.Launcher.Extensions
         {
             try
             {
-                // Update extension registry from remote configuration
-                UpdateExtensionRegistryFromRemoteConfig();
-                
                 // Get list of installed packages synchronously
                 var listRequest = Client.List(true); // Include built-in packages
                 
@@ -537,78 +533,6 @@ namespace com.MiAO.MCP.Launcher.Extensions
         }
 
         /// <summary>
-        /// Initializes remote configuration manager
-        /// </summary>
-        private static void InitializeRemoteConfiguration()
-        {
-            try
-            {
-                RemoteConfigManager.Initialize();
-                
-                // Subscribe to configuration updates
-                RemoteConfigManager.OnConfigurationUpdated -= OnRemoteConfigurationUpdated;
-                RemoteConfigManager.OnConfigurationUpdated += OnRemoteConfigurationUpdated;
-                
-                RemoteConfigManager.OnConfigurationError -= OnRemoteConfigurationError;
-                RemoteConfigManager.OnConfigurationError += OnRemoteConfigurationError;
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[MCP Hub] Failed to initialize remote configuration: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Handles remote configuration updates
-        /// </summary>
-        private static void OnRemoteConfigurationUpdated(RemoteConfigModel config)
-        {
-            Debug.Log($"[MCP Hub] Remote configuration updated to version {config.version}");
-            UpdateExtensionRegistryFromRemoteConfig();
-            OnExtensionsUpdated?.Invoke();
-        }
-
-        /// <summary>
-        /// Handles remote configuration errors
-        /// </summary>
-        private static void OnRemoteConfigurationError(string error)
-        {
-            Debug.LogWarning($"[MCP Hub] Remote configuration error: {error}");
-            // Fall back to local registry
-        }
-
-        /// <summary>
-        /// Updates the extension registry from remote configuration
-        /// </summary>
-        private static void UpdateExtensionRegistryFromRemoteConfig()
-        {
-            try
-            {
-                // Start with fallback registry
-                s_ExtensionRegistry.Clear();
-                foreach (var entry in s_FallbackExtensionRegistry)
-                {
-                    s_ExtensionRegistry[entry.Key] = entry.Value;
-                }
-
-                // Merge with remote registry
-                var remoteRegistry = RemoteConfigManager.GetRemoteExtensionRegistry();
-                foreach (var entry in remoteRegistry)
-                {
-                    s_ExtensionRegistry[entry.Key] = entry.Value;
-                }
-
-                Debug.Log($"[MCP Hub] Updated extension registry: {s_FallbackExtensionRegistry.Count} fallback + {remoteRegistry.Count} remote = {s_ExtensionRegistry.Count} total");
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[MCP Hub] Failed to update extension registry from remote config: {ex.Message}");
-                // Fall back to local registry only
-                s_ExtensionRegistry = new Dictionary<string, ExtensionRegistryEntry>(s_FallbackExtensionRegistry);
-            }
-        }
-
-        /// <summary>
         /// Forces a refresh of remote configuration
         /// </summary>
         public static async Task<bool> RefreshRemoteConfigurationAsync()
@@ -657,27 +581,141 @@ namespace com.MiAO.MCP.Launcher.Extensions
 
         /// <summary>
         /// Checks if a package is installed as a local package in the Assets directory
+        /// Provides compatibility with different naming conventions and legacy installations
         /// </summary>
         private static bool IsLocalPackage(string packageId)
         {
-            // Check if the package directory exists
-            var packagePath = Path.Combine("Packages", packageId);
-            if (Directory.Exists(packagePath))
+            // Standard check: package ID as directory name
+            var standardPath = Path.Combine("Packages", packageId);
+            if (Directory.Exists(standardPath))
             {
-                Debug.Log($"[MCP Hub] Found local package: {packageId} at {packagePath}");
+                Debug.Log($"[MCP Hub] Found local package: {packageId} at {standardPath}");
                 return true;
             }
             
-            // Check if it's a local package with a different directory name
-            var actualDirectoryName = GetPackageDirectoryName(packageId);
-            var actualPackagePath = Path.Combine("Packages", actualDirectoryName);
-            if (Directory.Exists(actualPackagePath))
+            // Legacy compatibility: check old directory name mappings
+            var legacyDirectoryNames = GetLegacyDirectoryNames(packageId);
+            foreach (var legacyName in legacyDirectoryNames)
+            {
+                var legacyPath = Path.Combine("Packages", legacyName);
+                if (Directory.Exists(legacyPath))
+                {
+                    Debug.Log($"[MCP Hub] Found legacy local package: {packageId} at {legacyPath}");
+                    return true;
+                }
+            }
+            
+            // Check all subdirectories in Packages for package.json with matching ID
+            if (CheckPackagesDirectoryForId(packageId))
             {
                 return true;
             }
             
             // Check if it's listed in packages-lock.json as a local package
             return IsPackageInLockFile(packageId);
+        }
+
+        /// <summary>
+        /// Gets legacy directory names for backward compatibility
+        /// </summary>
+        private static string[] GetLegacyDirectoryNames(string packageId)
+        {
+            var legacyMappings = new Dictionary<string, string[]>
+            {
+                { 
+                    "com.miao.mcp", 
+                    new[] { "MiAO-MCP-for-Unity", "miao-mcp-core", "mcp-core" }
+                },
+                { 
+                    "com.miao.mcp.essential", 
+                    new[] { "Unity-MCP-Essential", "Unity-MCP-Tools-Essential", "mcp-essential", "mcp-tools-essential" }
+                },
+                { 
+                    "com.miao.mcp.behavior-designer-tools", 
+                    new[] { "Unity-MCP-Tools-Behavior-Designer", "mcp-behavior-designer", "behavior-designer-tools" }
+                }
+            };
+
+            return legacyMappings.TryGetValue(packageId, out var names) ? names : new string[0];
+        }
+
+        /// <summary>
+        /// Scans Packages directory for package.json files with matching ID
+        /// </summary>
+        private static bool CheckPackagesDirectoryForId(string packageId)
+        {
+            try
+            {
+                var packagesDir = "Packages";
+                if (!Directory.Exists(packagesDir))
+                    return false;
+
+                var subdirectories = Directory.GetDirectories(packagesDir);
+                foreach (var dir in subdirectories)
+                {
+                    var packageJsonPath = Path.Combine(dir, "package.json");
+                    if (File.Exists(packageJsonPath))
+                    {
+                        try
+                        {
+                            var packageJsonContent = File.ReadAllText(packageJsonPath);
+                            // Simple JSON parsing to extract "name" field
+                            if (ExtractPackageNameFromJson(packageJsonContent) == packageId)
+                            {
+                                Debug.Log($"[MCP Hub] Found package {packageId} in directory: {Path.GetFileName(dir)}");
+                                return true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"[MCP Hub] Failed to read package.json in {dir}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP Hub] Error scanning Packages directory: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Extracts package name from package.json content
+        /// Simple implementation without full JSON parser
+        /// </summary>
+        private static string ExtractPackageNameFromJson(string jsonContent)
+        {
+            try
+            {
+                // Use Unity's JsonUtility or simple regex to extract name field
+                var lines = jsonContent.Split('\n');
+                foreach (var line in lines)
+                {
+                    var trimmedLine = line.Trim();
+                    if (trimmedLine.StartsWith("\"name\""))
+                    {
+                        // Extract value between quotes: "name": "com.miao.mcp"
+                        var colonIndex = trimmedLine.IndexOf(':');
+                        if (colonIndex > 0)
+                        {
+                            var valuesPart = trimmedLine.Substring(colonIndex + 1).Trim();
+                            valuesPart = valuesPart.TrimEnd(','); // Remove trailing comma
+                            if (valuesPart.StartsWith("\"") && valuesPart.EndsWith("\""))
+                            {
+                                return valuesPart.Substring(1, valuesPart.Length - 2);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP Hub] Error parsing package.json: {ex.Message}");
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -715,19 +753,73 @@ namespace com.MiAO.MCP.Launcher.Extensions
         }
 
         /// <summary>
-        /// Gets the actual directory name for a package ID in Assets structure
+        /// Gets the directory name for a package ID
+        /// Uses package ID as directory name for consistency
         /// </summary>
         private static string GetPackageDirectoryName(string packageId)
         {
-            // Map package IDs to actual directory names in Packages/com.miao.mcp structure
-            var packageIdToDirectoryMap = new Dictionary<string, string>
-            {
-                { "com.miao.mcp.behavior-designer-tools", "Unity-MCP-Tools-Behavior-Designer" },
-                { "com.miao.mcp.essential", "Unity-MCP-Essential" },
-                { "com.miao.mcp", "MiAO-MCP-for-Unity" }
-            };
+            // Use package ID directly as directory name for consistency
+            // This makes the directory structure more predictable and standardized
+            return packageId;
+        }
 
-            return packageIdToDirectoryMap.TryGetValue(packageId, out var directoryName) ? directoryName : packageId;
+        /// <summary>
+        /// Finds the actual directory name for a package, considering legacy names
+        /// </summary>
+        private static string FindActualPackageDirectory(string packageId)
+        {
+            // First check standard package ID directory
+            var standardPath = Path.Combine("Packages", packageId);
+            if (Directory.Exists(standardPath))
+            {
+                return packageId;
+            }
+            
+            // Check legacy directory names
+            var legacyNames = GetLegacyDirectoryNames(packageId);
+            foreach (var legacyName in legacyNames)
+            {
+                var legacyPath = Path.Combine("Packages", legacyName);
+                if (Directory.Exists(legacyPath))
+                {
+                    return legacyName;
+                }
+            }
+            
+            // Scan all directories for package.json with matching ID
+            try
+            {
+                var packagesDir = "Packages";
+                if (Directory.Exists(packagesDir))
+                {
+                    var subdirectories = Directory.GetDirectories(packagesDir);
+                    foreach (var dir in subdirectories)
+                    {
+                        var packageJsonPath = Path.Combine(dir, "package.json");
+                        if (File.Exists(packageJsonPath))
+                        {
+                            try
+                            {
+                                var packageJsonContent = File.ReadAllText(packageJsonPath);
+                                if (ExtractPackageNameFromJson(packageJsonContent) == packageId)
+                                {
+                                    return Path.GetFileName(dir);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogWarning($"[MCP Hub] Failed to read package.json in {dir}: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP Hub] Error scanning for package directory: {ex.Message}");
+            }
+            
+            return null; // Not found
         }
 
         /// <summary>
