@@ -19,8 +19,8 @@ namespace com.MiAO.MCP.Launcher.Config
         // Configuration URLs - primary and fallback sources
         private static readonly string[] CONFIG_URLS = new string[]
         {
-            "https://raw.githubusercontent.com/MiAO-AI-Lab/MiAO-MCP-Hub-Launcher/main/Assets/MiAO-MCP-Hub-Launcher/Editor/Config/extensions.json",
-            "https://cdn.jsdelivr.net/gh/MiAO-AI-Lab/MiAO-MCP-Hub-Launcher@main/Assets/MiAO-MCP-Hub-Launcher/Editor/Config/extensions.json"
+            "https://raw.githubusercontent.com/MiAO-AI-Lab/MiAO-MCP-Hub-Launcher/main/Editor/Config/extensions.json",
+            "https://cdn.jsdelivr.net/gh/MiAO-AI-Lab/MiAO-MCP-Hub-Launcher@main/Editor/Config/extensions.json"
         };
 
         // Local cache settings

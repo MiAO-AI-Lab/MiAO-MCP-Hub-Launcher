@@ -383,16 +383,14 @@ namespace com.MiAO.MCP.Launcher.UI
                     }
                     else
                     {
-                        button.text = "Up to Date";
-                        button.SetEnabled(false);
-                        button.style.opacity = 0.5f;
+                        button.text = "Uninstall";
+                        button.clickable = new Clickable(() => UninstallExtension(extension));
                     }
                 }
                 else
                 {
                     button.text = "Install";
                     button.SetEnabled(true);
-                    button.style.opacity = 1f;
                     button.clickable = new Clickable(() => InstallExtension(extension));
                 }
                 return;
