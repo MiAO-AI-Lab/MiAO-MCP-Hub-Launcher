@@ -1,0 +1,42 @@
+{
+  "version": "1.0.0",
+  "extensions": {
+    "packages": [
+      {
+        "id": "com.miao.mcp",
+        "displayName": "MiAO MCP Core Framework (Required)",
+        "description": "Core framework for Unity MCP",
+        "author": "MiAO AI Lab",
+        "latestVersion": "1.0.1",
+        "category": "Essential",
+        "packageUrl": "https://github.com/MiAO-AI-Lab/MiAO-MCP-for-Unity.git",
+        "dependencies": []
+      },
+      {
+        "id": "com.miao.mcp.essential",
+        "displayName": "MiAO MCP Essential Tools",
+        "description": "Essential tools for basic Unity MCP operations",
+        "author": "MiAO AI Lab",
+        "latestVersion": "1.0.0",
+        "category": "Essential",
+        "packageUrl": "https://github.com/MiAO-AI-Lab/Unity-MCP-Tools-Essential.git",
+        "dependencies": [
+          "com.miao.mcp"
+        ]
+      },
+      {
+        "id": "com.miao.mcp.behavior-designer-tools",
+        "displayName": "MiAO MCP Behavior Designer Tools",
+        "description": "Behavior Designer integration tools for Unity MCP",
+        "author": "MiAO AI Lab",
+        "latestVersion": "1.0.0",
+        "category": "Essential",
+        "packageUrl": "https://github.com/MiAO-AI-Lab/Unity-MCP-Tools-Behavior-Designer.git",
+        "dependencies": [
+          "com.miao.mcp",
+          "com.miao.mcp.essential"
+        ]
+      }
+    ]
+  }
+}

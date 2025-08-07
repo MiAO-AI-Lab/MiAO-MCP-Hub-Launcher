@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEngine.UIElements;
 using com.MiAO.MCP.Launcher.Extensions;
+using com.MiAO.MCP.Launcher.Config;
 
 namespace com.MiAO.MCP.Launcher.UI
 {
@@ -156,8 +157,17 @@ namespace com.MiAO.MCP.Launcher.UI
             m_RefreshButton.style.minWidth = 80;
             m_RefreshButton.style.marginRight = 5;
             
+            // Remote config refresh button
+            var remoteRefreshButton = new Button(() => RefreshRemoteConfiguration())
+            {
+                text = "Update Registry"
+            };
+            remoteRefreshButton.style.minWidth = 100;
+            remoteRefreshButton.style.marginRight = 5;
+            
             m_Toolbar.Add(m_SearchField);
             m_Toolbar.Add(m_RefreshButton);
+            m_Toolbar.Add(remoteRefreshButton);
             
             m_Root.Add(m_Toolbar);
         }
@@ -842,6 +852,38 @@ namespace com.MiAO.MCP.Launcher.UI
             {
                 m_ProgressBar.style.display = DisplayStyle.None;
                 m_ProgressBar.value = 0f;
+            }
+        }
+
+        /// <summary>
+        /// Refreshes remote configuration
+        /// </summary>
+        private async void RefreshRemoteConfiguration()
+        {
+            UpdateStatus("Updating extension registry from remote source...");
+            ShowProgressBar();
+            
+            try
+            {
+                var success = await ExtensionManager.RefreshRemoteConfigurationAsync();
+                if (success)
+                {
+                    UpdateStatus("Successfully updated extension registry from remote source");
+                    RefreshExtensionList(); // Refresh the UI with new data
+                }
+                else
+                {
+                    UpdateStatus("Failed to update extension registry - using cached data");
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Error updating remote registry: {ex.Message}");
+                Debug.LogError($"[MCP Hub] Remote configuration refresh failed: {ex}");
+            }
+            finally
+            {
+                HideProgressBar();
             }
         }
 

@@ -9,6 +9,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
+using com.MiAO.MCP.Launcher.Config;
 using Debug = UnityEngine.Debug;
 
 namespace com.MiAO.MCP.Launcher.Extensions
@@ -25,8 +26,8 @@ namespace com.MiAO.MCP.Launcher.Extensions
         private static readonly Dictionary<string, UnityEditor.PackageManager.PackageInfo> s_InstalledPackages = 
             new Dictionary<string, UnityEditor.PackageManager.PackageInfo>();
 
-        // Known MCP extension packages registry
-        private static readonly Dictionary<string, ExtensionRegistryEntry> s_ExtensionRegistry = 
+        // Known MCP extension packages registry (fallback + remote)
+        private static readonly Dictionary<string, ExtensionRegistryEntry> s_FallbackExtensionRegistry = 
             new Dictionary<string, ExtensionRegistryEntry>
             {
                 {
@@ -64,6 +65,10 @@ namespace com.MiAO.MCP.Launcher.Extensions
                 }
             };
 
+        // Combined registry (fallback + remote)
+        private static Dictionary<string, ExtensionRegistryEntry> s_ExtensionRegistry = 
+            new Dictionary<string, ExtensionRegistryEntry>();
+
         /// <summary>
         /// Event triggered when extension list is updated
         /// </summary>
@@ -79,6 +84,9 @@ namespace com.MiAO.MCP.Launcher.Extensions
         /// </summary>
         public static List<ExtensionPackageInfo> GetAvailableExtensions()
         {
+            // Initialize remote configuration if needed
+            InitializeRemoteConfiguration();
+            
             RefreshExtensionCache();
             
             // If no extensions found after refresh, create sample data for testing
@@ -155,7 +163,7 @@ namespace com.MiAO.MCP.Launcher.Extensions
                     
                     // Clone the package from Git repository
                     Debug.Log($"[MCP Hub] Cloning package from Git: {registryEntry.PackageUrl}");
-                    var cloneResult = await ClonePackageFromGit(registryEntry.PackageUrl, packagePath, actualDirectoryName);
+                    var cloneResult = await ClonePackageFromGit(registryEntry.PackageUrl, packagePath, actualDirectoryName, extension.LatestVersion);
                     
                     if (cloneResult)
                     {
@@ -422,6 +430,9 @@ namespace com.MiAO.MCP.Launcher.Extensions
         {
             try
             {
+                // Update extension registry from remote configuration
+                UpdateExtensionRegistryFromRemoteConfig();
+                
                 // Get list of installed packages synchronously
                 var listRequest = Client.List(true); // Include built-in packages
                 
@@ -523,6 +534,95 @@ namespace com.MiAO.MCP.Launcher.Extensions
         {
             s_ExtensionRegistry[registryEntry.Id] = registryEntry;
             RefreshExtensionCache();
+        }
+
+        /// <summary>
+        /// Initializes remote configuration manager
+        /// </summary>
+        private static void InitializeRemoteConfiguration()
+        {
+            try
+            {
+                RemoteConfigManager.Initialize();
+                
+                // Subscribe to configuration updates
+                RemoteConfigManager.OnConfigurationUpdated -= OnRemoteConfigurationUpdated;
+                RemoteConfigManager.OnConfigurationUpdated += OnRemoteConfigurationUpdated;
+                
+                RemoteConfigManager.OnConfigurationError -= OnRemoteConfigurationError;
+                RemoteConfigManager.OnConfigurationError += OnRemoteConfigurationError;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP Hub] Failed to initialize remote configuration: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Handles remote configuration updates
+        /// </summary>
+        private static void OnRemoteConfigurationUpdated(RemoteConfigModel config)
+        {
+            Debug.Log($"[MCP Hub] Remote configuration updated to version {config.version}");
+            UpdateExtensionRegistryFromRemoteConfig();
+            OnExtensionsUpdated?.Invoke();
+        }
+
+        /// <summary>
+        /// Handles remote configuration errors
+        /// </summary>
+        private static void OnRemoteConfigurationError(string error)
+        {
+            Debug.LogWarning($"[MCP Hub] Remote configuration error: {error}");
+            // Fall back to local registry
+        }
+
+        /// <summary>
+        /// Updates the extension registry from remote configuration
+        /// </summary>
+        private static void UpdateExtensionRegistryFromRemoteConfig()
+        {
+            try
+            {
+                // Start with fallback registry
+                s_ExtensionRegistry.Clear();
+                foreach (var entry in s_FallbackExtensionRegistry)
+                {
+                    s_ExtensionRegistry[entry.Key] = entry.Value;
+                }
+
+                // Merge with remote registry
+                var remoteRegistry = RemoteConfigManager.GetRemoteExtensionRegistry();
+                foreach (var entry in remoteRegistry)
+                {
+                    s_ExtensionRegistry[entry.Key] = entry.Value;
+                }
+
+                Debug.Log($"[MCP Hub] Updated extension registry: {s_FallbackExtensionRegistry.Count} fallback + {remoteRegistry.Count} remote = {s_ExtensionRegistry.Count} total");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[MCP Hub] Failed to update extension registry from remote config: {ex.Message}");
+                // Fall back to local registry only
+                s_ExtensionRegistry = new Dictionary<string, ExtensionRegistryEntry>(s_FallbackExtensionRegistry);
+            }
+        }
+
+        /// <summary>
+        /// Forces a refresh of remote configuration
+        /// </summary>
+        public static async Task<bool> RefreshRemoteConfigurationAsync()
+        {
+            Debug.Log("[MCP Hub] Refreshing remote configuration...");
+            return await RemoteConfigManager.RefreshCacheAsync();
+        }
+
+        /// <summary>
+        /// Gets cache information for remote configuration
+        /// </summary>
+        public static CacheInfo GetRemoteConfigCacheInfo()
+        {
+            return RemoteConfigManager.GetCacheInfo();
         }
 
         /// <summary>
@@ -826,8 +926,9 @@ namespace com.MiAO.MCP.Launcher.Extensions
 
         /// <summary>
         /// Clones a package from Git repository to the Assets directory
+        /// First tries to clone the specific version tag, falls back to main branch
         /// </summary>
-        private static async Task<bool> ClonePackageFromGit(string gitUrl, string targetPath, string directoryName)
+        private static async Task<bool> ClonePackageFromGit(string gitUrl, string targetPath, string directoryName, string targetVersion = null)
         {
             try
             {
@@ -846,7 +947,100 @@ namespace com.MiAO.MCP.Launcher.Extensions
                     Directory.Delete(targetPath, true);
                 }
                 
-                // Execute Git clone command
+                // First try to clone specific version tag if specified
+                if (!string.IsNullOrEmpty(targetVersion))
+                {
+                    Debug.Log($"[MCP Hub] Attempting to clone tag version: {targetVersion}");
+                    var tagResult = await TryCloneSpecificTag(gitUrl, directoryName, targetVersion);
+                    if (tagResult)
+                    {
+                        Debug.Log($"[MCP Hub] Successfully cloned tag version {targetVersion}");
+                        AssetDatabase.Refresh();
+                        return true;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[MCP Hub] Tag {targetVersion} not found, falling back to main branch");
+                    }
+                }
+                
+                // Fall back to cloning main branch
+                Debug.Log($"[MCP Hub] Cloning main branch from: {gitUrl}");
+                var mainResult = await TryCloneMainBranch(gitUrl, directoryName);
+                if (mainResult)
+                {
+                    Debug.Log($"[MCP Hub] Successfully cloned main branch");
+                    AssetDatabase.Refresh();
+                    return true;
+                }
+                
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[MCP Hub] Failed to clone package from Git: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Tries to clone a specific tag version
+        /// </summary>
+        private static async Task<bool> TryCloneSpecificTag(string gitUrl, string directoryName, string tagVersion)
+        {
+            try
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "git",
+                    Arguments = $"clone --branch v{tagVersion} --single-branch {gitUrl} \"{directoryName}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetFullPath("Packages")
+                };
+                
+                Debug.Log($"[MCP Hub] Executing: git clone --branch v{tagVersion} --single-branch {gitUrl} \"{directoryName}\"");
+                
+                using (var process = new System.Diagnostics.Process { StartInfo = startInfo })
+                {
+                    process.Start();
+                    
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    
+                    await Task.Run(() => process.WaitForExit());
+                    
+                    var output = await outputTask;
+                    var error = await errorTask;
+                    
+                    if (process.ExitCode == 0)
+                    {
+                        Debug.Log($"[MCP Hub] Tag clone successful: {output}");
+                        return true;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[MCP Hub] Tag clone failed: {error}");
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MCP Hub] Exception during tag clone: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Tries to clone the main branch
+        /// </summary>
+        private static async Task<bool> TryCloneMainBranch(string gitUrl, string directoryName)
+        {
+            try
+            {
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "git",
@@ -858,20 +1052,15 @@ namespace com.MiAO.MCP.Launcher.Extensions
                     WorkingDirectory = Path.GetFullPath("Packages")
                 };
                 
-                Debug.Log($"[MCP Hub] Working directory: {Path.GetFullPath("Packages")}");
-                Debug.Log($"[MCP Hub] Clone target: {directoryName}");
+                Debug.Log($"[MCP Hub] Executing: git clone {gitUrl} \"{directoryName}\"");
                 
                 using (var process = new System.Diagnostics.Process { StartInfo = startInfo })
                 {
-                    Debug.Log($"[MCP Hub] Executing: git clone {gitUrl} \"{targetPath}\"");
-                    
                     process.Start();
                     
-                    // Read output asynchronously
                     var outputTask = process.StandardOutput.ReadToEndAsync();
                     var errorTask = process.StandardError.ReadToEndAsync();
                     
-                    // Wait for completion
                     await Task.Run(() => process.WaitForExit());
                     
                     var output = await outputTask;
@@ -879,23 +1068,19 @@ namespace com.MiAO.MCP.Launcher.Extensions
                     
                     if (process.ExitCode == 0)
                     {
-                        Debug.Log($"[MCP Hub] Git clone successful: {output}");
-                        
-                        // Refresh AssetDatabase to detect the new package
-                        AssetDatabase.Refresh();
-                        
+                        Debug.Log($"[MCP Hub] Main branch clone successful: {output}");
                         return true;
                     }
                     else
                     {
-                        Debug.LogError($"[MCP Hub] Git clone failed: {error}");
+                        Debug.LogError($"[MCP Hub] Main branch clone failed: {error}");
                         return false;
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[MCP Hub] Failed to clone package from Git: {ex.Message}");
+                Debug.LogError($"[MCP Hub] Exception during main branch clone: {ex.Message}");
                 return false;
             }
         }
